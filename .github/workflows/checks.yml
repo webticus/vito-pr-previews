@@ -1,0 +1,22 @@
+name: Checks
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Check PHP syntax and configuration safety
+        run: |
+          find . -name '*.php' -print0 | xargs -0 -n 1 php -l
+          php tests/run.php
+      - name: Check the inline deployment script
+        run: |
+          bash -n scripts/deploy.sh
+          shellcheck scripts/deploy.sh
+      - name: Check GitHub deployment failure handling
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s github -p test_preview.py

@@ -1,0 +1,64 @@
+name: Vito PR Previews
+description: Deploy, update, and remove Laravel pull-request previews through Vito workflows.
+
+inputs:
+  vito-api-url:
+    description: HTTPS Vito base URL, or http://127.0.0.1:18001 when using an encrypted SSH tunnel
+    required: true
+  vito-api-token:
+    description: Vito API token with write access to the preview project
+    required: true
+  workflow-id:
+    description: Vito workflow containing the Manage Laravel PR preview action
+    required: true
+  project-id:
+    description: Vito project ID
+    required: true
+  server-id:
+    description: Vito server ID
+    required: true
+  source-control-id:
+    description: Vito GitHub source-control ID
+    required: true
+  domain-pattern:
+    description: Preview hostname with one {pr} placeholder
+    required: true
+  php-version:
+    description: PHP version installed on the server
+    required: true
+  ssl-id:
+    description: Optional saved server certificate ID
+    default: ''
+  environment:
+    description: JSON object of app-specific environment values
+    default: '{}'
+  seed:
+    description: Seed each fresh preview database once
+    default: 'false'
+  pr-number:
+    description: Required for manual dispatch; otherwise taken from the PR event
+    default: ''
+  github-token:
+    description: GitHub token with contents/read, pull-requests/read, and deployments/write
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Manage preview through Vito
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        VITO_API_URL: ${{ inputs.vito-api-url }}
+        VITO_API_TOKEN: ${{ inputs.vito-api-token }}
+        VITO_WORKFLOW_ID: ${{ inputs.workflow-id }}
+        VITO_PROJECT_ID: ${{ inputs.project-id }}
+        VITO_SERVER_ID: ${{ inputs.server-id }}
+        VITO_SOURCE_CONTROL_ID: ${{ inputs.source-control-id }}
+        VITO_DOMAIN_PATTERN: ${{ inputs.domain-pattern }}
+        VITO_PHP_VERSION: ${{ inputs.php-version }}
+        VITO_SSL_ID: ${{ inputs.ssl-id }}
+        VITO_ENVIRONMENT: ${{ inputs.environment }}
+        VITO_SEED: ${{ inputs.seed }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      run: python3 "$GITHUB_ACTION_PATH/github/preview.py"
