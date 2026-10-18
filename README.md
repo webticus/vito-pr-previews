@@ -112,7 +112,7 @@ The native **Deploy Site** action runs it inside the prepared PR release, as the
 environment: '{"APP_LOCALE":"bg","TURNSTILE_HOSTNAMES":"{domain}"}'
 ```
 
-`{domain}` and `{pr}` are expanded. Database, mail, session, cache, queue, AWS, and Redis settings are protected. All previews use the configurable `site-user` (`pr-previews` by default), which is retained after cleanup. Use a dedicated preview user; its PRs share filesystem permissions. Every preview gets its own app key, storage, cache, and database; mail is logged and no scheduler or queue worker is started. Production environment files are never copied.
+`{domain}` and `{pr}` are expanded. Database, mail, session, cache, queue, AWS, and Redis settings are protected. All previews use the configurable `site-user` (`pr-previews` by default), which is retained after cleanup. Use a dedicated preview user per repository; its PRs share filesystem permissions. One read-only GitHub deploy key is reused for that user and retained after PR cleanup. GitHub App connections need no deploy key. Every preview gets its own app key, storage, cache, and database; mail is logged and no scheduler or queue worker is started. Production environment files are never copied.
 
 Laravel routes are protected with `artisan down --secret` by default; the stable bypass link is updated in one PR comment. Set `maintenance-protection: 'false'` for public previews. Static files remain accessible, and anyone who can read the comment can unlock the app. All responses include noindex. Only same-repository PRs run automatically. A failed HTTP health check restores the previous release when available; migrations are not reversed.
 

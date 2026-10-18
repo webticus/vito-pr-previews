@@ -14,12 +14,7 @@ final class DeletePreview
         $lock = $site->isolatedUser?->lock() ?? $site->server->isolatedUserLock($site->user);
         $lock->block(30);
         try {
-            if ($site->sourceControl && isset($site->type_data['deploy_key_id'])) {
-                $site->sourceControl->provider()->deleteDeployKey((string) $site->type_data['deploy_key_id'], $site->repository);
-            }
             $site->webserver()->deleteSite($site);
-            $key = $site->getSshKeyName();
-            $site->server->ssh($site->user)->exec('rm -f -- "$HOME/.ssh/'.$key.'" "$HOME/.ssh/'.$key.'.pub"');
             $server = $site->server;
             $id = $site->id;
             $domain = $site->domain;
