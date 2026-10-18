@@ -154,6 +154,7 @@ class ManagePreview extends AbstractWorkflowAction
                     'composer' => false,
                     'package_manager' => 'none',
                 ]);
+                $site->refresh();
                 $site->jsonUpdate('type_data', 'pr_preview', [
                     'repository' => $identity->repository, 'number' => $identity->number, 'domain_pattern' => $data['domain_pattern'], 'site_user' => $identity->username,
                 ]);
