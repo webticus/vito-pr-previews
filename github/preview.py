@@ -20,7 +20,7 @@ class Api:
         headers = {
             "Authorization": "Bearer " + self.token,
             "Accept": "application/json",
-            "User-Agent": "burzsait-pr-preview",
+            "User-Agent": "VitoPRPreviews/0.1",
         }
         body = None if payload is None else json.dumps(payload).encode()
         if body is not None:
@@ -82,20 +82,21 @@ def run_vito(vito, project, workflow, operation, number, sha, timeout=1500, conf
 
 
 def verify_preview(url, number, sha):
+    headers = {"Cache-Control": "no-cache", "User-Agent": "VitoPRPreviews/0.1", "Accept": "*/*"}
     for attempt in range(12):
         try:
-            with urlopen(Request(url + "/__preview.json", headers={"Cache-Control": "no-cache"}), timeout=30) as response:
+            with urlopen(Request(url + "/__preview.json", headers=headers), timeout=30) as response:
                 metadata = json.load(response)
                 robots = response.headers.get("X-Robots-Tag", "")
             if metadata == {"sha": sha, "pr": number} and "noindex" in robots:
-                with urlopen(url + "/up", timeout=30) as response:
+                with urlopen(Request(url + "/up", headers=headers), timeout=30) as response:
                     if response.status == 200:
                         return
         except (HTTPError, URLError, TimeoutError, ValueError):
             pass
         if attempt < 11:
             time.sleep(10)
-    raise RuntimeError("Public HTTPS preview did not serve the requested commit with noindex protection.")
+    raise RuntimeError("Public preview did not serve the requested commit with noindex protection.")
 
 
 def deployment_status(github, repository, deployment, state, url, log_url):
@@ -132,10 +133,13 @@ def main():
     operation = "deploy" if pull_request["state"] == "open" else "destroy"
     environment = f"preview-pr-{number}"
     domain_pattern = os.environ["VITO_DOMAIN_PATTERN"]
-    url = "https://" + domain_pattern.replace("{pr}", str(number))
+    ssl_enabled = os.environ.get("VITO_SSL_ENABLED", "true").lower() == "true"
+    url = ("https://" if ssl_enabled else "http://") + domain_pattern.replace("{pr}", str(number))
     log_url = f"https://github.com/{repository}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
     project = int(os.environ.get("VITO_PROJECT_ID", "2"))
-    workflow = int(os.environ["VITO_WORKFLOW_ID"])
+    deploy_workflow = int(os.environ["VITO_WORKFLOW_ID"])
+    cleanup_workflow = int(os.environ.get("VITO_CLEANUP_WORKFLOW_ID") or deploy_workflow)
+    workflow = deploy_workflow if operation == "deploy" else cleanup_workflow
     repository_info = github.request(f"/repos/{repository}")
     configuration = {
         "server_id": int(os.environ["VITO_SERVER_ID"]),
@@ -146,7 +150,12 @@ def main():
         "php_version": os.environ["VITO_PHP_VERSION"],
         "environment": os.environ.get("VITO_ENVIRONMENT", "{}"),
         "seed": os.environ.get("VITO_SEED", "false").lower() == "true",
+        "database_driver": os.environ.get("VITO_DATABASE_DRIVER", "sqlite"),
+        "ssl_enabled": ssl_enabled,
+        "force_ssl": os.environ.get("VITO_FORCE_SSL", "true").lower() == "true",
     }
+    if os.environ.get("VITO_DEPLOY_SCRIPT"):
+        configuration["deploy_script"] = os.environ["VITO_DEPLOY_SCRIPT"]
     if os.environ.get("VITO_SSL_ID"):
         configuration["ssl_id"] = int(os.environ["VITO_SSL_ID"])
 
@@ -171,7 +180,7 @@ def main():
             # Closing a PR during a slow build must still remove its preview.
             latest = github.request(f"/repos/{repository}/pulls/{number}")
             if latest["state"] != "open":
-                run_vito(vito, project, workflow, "destroy", number, sha, configuration=configuration)
+                run_vito(vito, project, cleanup_workflow, "destroy", number, sha, configuration=configuration)
                 deactivate_deployments(github, repository, environment, log_url)
                 return
             deployment_status(github, repository, deployment, "success", url, log_url)

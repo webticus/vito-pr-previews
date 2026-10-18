@@ -47,6 +47,16 @@ check(str_contains($environment, 'APP_LOCALE="bg"'), 'App-specific settings must
 check(str_contains($environment, '\\$name'), 'Dotenv interpolation must be escaped.');
 check(str_contains($environment, 'TEST_HOST="website-pr-12.example.com"'), 'App-specific host placeholders must resolve.');
 
+$sql = PreviewEnvironment::render($identity, '/home/preview/app', '{}', [
+    'driver' => 'mariadb', 'database' => 'prv123', 'host' => '127.0.0.1',
+    'port' => '3306', 'username' => 'prv123', 'password' => 'test-password',
+]);
+check(str_contains($sql, 'DB_CONNECTION="mariadb"'), 'Selected SQL driver must be used.');
+check(str_contains($sql, 'DB_DATABASE="prv123"') && str_contains($sql, 'DB_USERNAME="prv123"'), 'SQL resources must use dedicated credentials.');
+$http = PreviewEnvironment::render($identity, '/home/preview/app', '{}', sslEnabled: false);
+check(str_contains($http, 'APP_URL="http://website-pr-12.example.com"'), 'SSL must be optional.');
+check(str_contains($http, 'SESSION_SECURE_COOKIE="false"'), 'HTTP previews must have usable session cookies.');
+
 foreach (['DB_HOST', 'MAIL_MAILER', 'APP_DEBUG', 'APP_KEY', 'QUEUE_CONNECTION', 'AWS_SECRET_ACCESS_KEY'] as $key) {
     rejects(fn () => PreviewEnvironment::render($identity, '/home/preview/app', json_encode([$key => 'unsafe'], JSON_THROW_ON_ERROR)));
 }

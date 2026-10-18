@@ -7,6 +7,7 @@ namespace App\Vito\Plugins\Webticus\VitoPrPreviews\Actions;
 use App\Actions\HostedDomain\ActivateHostedDomain;
 use App\Actions\Site\CreateSite;
 use App\Actions\Site\DeleteSite;
+use App\Actions\Site\UpdateDeploymentScript;
 use App\Actions\SSL\AssignSslToDomains;
 use App\Actions\Webserver\GenerateNginxConfig;
 use App\Enums\SiteStatus;
@@ -14,6 +15,7 @@ use App\Enums\SslMethod;
 use App\Models\Server;
 use App\Models\Site;
 use App\Models\Ssl;
+use App\Vito\Plugins\Webticus\VitoPrPreviews\Support\ManagedDatabase;
 use App\Vito\Plugins\Webticus\VitoPrPreviews\Support\PreviewEnvironment;
 use App\Vito\Plugins\Webticus\VitoPrPreviews\Support\PreviewIdentity;
 use App\WorkflowActions\AbstractWorkflowAction;
@@ -23,7 +25,7 @@ use Illuminate\Validation\Rule;
 use RuntimeException;
 use Throwable;
 
-final class ManagePreview extends AbstractWorkflowAction
+class ManagePreview extends AbstractWorkflowAction
 {
     public function inputs(): array
     {
@@ -36,6 +38,10 @@ final class ManagePreview extends AbstractWorkflowAction
             'domain_pattern' => 'Preview hostname with one {pr} placeholder, e.g. pr-{pr}.example.com',
             'php_version' => 'Installed PHP version, e.g. 8.4',
             'ssl_id' => 'Saved server SSL ID, or omit to select a matching saved certificate',
+            'ssl_enabled' => 'Enable HTTPS (boolean; default true); false requires no certificate',
+            'force_ssl' => 'Redirect HTTP to HTTPS (boolean; default true when SSL is enabled)',
+            'database_driver' => 'sqlite, mariadb or mysql (default sqlite)',
+            'deploy_script' => 'Optional repository script path, e.g. deploy.sh; runs with DEPLOY_PREVIEW=1',
             'pr_number' => 'Pull request number',
             'sha' => 'Full 40-character PR head SHA',
             'request_id' => 'Unique 32-character hexadecimal request ID',
@@ -46,7 +52,7 @@ final class ManagePreview extends AbstractWorkflowAction
 
     public function outputs(): array
     {
-        return ['site_id' => 'Managed preview site ID', 'url' => 'HTTPS preview URL'];
+        return ['site_id' => 'Managed preview site ID', 'url' => 'Preview URL'];
     }
 
     public function run(array $input): array
@@ -60,6 +66,11 @@ final class ManagePreview extends AbstractWorkflowAction
             'domain_pattern' => ['required', 'string', 'max:253'],
             'php_version' => ['required_if:operation,deploy', 'regex:/\A8\.[3-9]\z/'],
             'ssl_id' => ['nullable', 'integer', 'min:1'],
+            'ssl_enabled' => ['nullable', 'boolean'],
+            'force_ssl' => ['nullable', 'boolean'],
+            'database_driver' => ['nullable', Rule::in(['sqlite', 'mariadb', 'mysql'])],
+            'deploy_script' => ['nullable', 'string', 'max:200', 'regex:/\A[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\z/', 'not_regex:/\.\./'],
+            'prepare_only' => ['nullable', 'boolean'],
             'pr_number' => ['required', 'integer', 'min:1', 'max:9999999'],
             'sha' => ['required', 'regex:/\A[a-f0-9]{40}\z/'],
             'request_id' => ['required', 'regex:/\A[a-f0-9]{32}\z/'],
@@ -68,6 +79,10 @@ final class ManagePreview extends AbstractWorkflowAction
         ])->validate();
 
         $identity = new PreviewIdentity($data['repository'], (int) $data['pr_number'], $data['domain_pattern']);
+        $data['ssl_enabled'] = (bool) ($data['ssl_enabled'] ?? true);
+        $data['force_ssl'] = $data['ssl_enabled'] && (bool) ($data['force_ssl'] ?? true);
+        $data['database_driver'] ??= 'sqlite';
+        $url = ($data['ssl_enabled'] ? 'https://' : 'http://').$identity->domain;
         $server = Server::query()->findOrFail($data['server_id']);
         $this->authorize('update', $server);
 
@@ -79,7 +94,7 @@ final class ManagePreview extends AbstractWorkflowAction
 
         $lock = "pr-previews:{$server->id}:{$identity->username}";
 
-        return Cache::lock($lock, 1800)->block(30, function () use ($server, $data, $identity): array {
+        return Cache::lock($lock, 1800)->block(30, function () use ($server, $data, $identity, $url): array {
             $site = $server->sites()->where('domain', $identity->domain)->first();
 
             if ($site instanceof Site && ($site->user !== $identity->username
@@ -91,25 +106,29 @@ final class ManagePreview extends AbstractWorkflowAction
             if ($data['operation'] === 'destroy') {
                 if ($site instanceof Site) {
                     $this->authorize('delete', [$site, $server]);
+                    (new ManagedDatabase($this->user))->destroy($site, $identity);
                     app(DeleteSite::class)->delete($site, ['domain' => $identity->domain]);
                 }
 
                 $this->success($server, $identity, $data);
 
-                return ['site_id' => null, 'url' => "https://{$identity->domain}"];
+                return ['site_id' => null, 'url' => $url];
             }
 
-            $certificate = isset($data['ssl_id'])
-                ? Ssl::activeServerLevel($server->id)->findOrFail($data['ssl_id'])
-                : app(AssignSslToDomains::class)->findBestMatch($identity->domain, Ssl::activeServerLevel($server->id)->get());
+            $certificate = null;
+            if ($data['ssl_enabled']) {
+                $certificate = isset($data['ssl_id'])
+                    ? Ssl::activeServerLevel($server->id)->findOrFail($data['ssl_id'])
+                    : app(AssignSslToDomains::class)->findBestMatch($identity->domain, Ssl::activeServerLevel($server->id)->get());
 
-            if (! $certificate || ! $certificate->coversDomain($identity->domain)
-                || ! $certificate->expires_at || $certificate->expires_at->isPast()) {
-                throw new RuntimeException('A valid saved server certificate covering the preview hostname is required.');
+                if (! $certificate || ! $certificate->coversDomain($identity->domain)
+                    || ! $certificate->expires_at || $certificate->expires_at->isPast()) {
+                    throw new RuntimeException('A valid saved server certificate covering the preview hostname is required when SSL is enabled.');
+                }
             }
 
             $path = "/home/{$identity->username}/{$identity->domain}";
-            $environment = PreviewEnvironment::render($identity, $path, $data['environment'] ?? '{}');
+            PreviewEnvironment::render($identity, $path, $data['environment'] ?? '{}', sslEnabled: $data['ssl_enabled']);
 
             if (! $site instanceof Site) {
                 $this->authorize('create', [Site::class, $server]);
@@ -126,7 +145,7 @@ final class ManagePreview extends AbstractWorkflowAction
                     'package_manager' => 'none',
                 ]);
                 $site->jsonUpdate('type_data', 'pr_preview', [
-                    'repository' => $identity->repository, 'number' => $identity->number,
+                    'repository' => $identity->repository, 'number' => $identity->number, 'domain_pattern' => $data['domain_pattern'],
                 ]);
                 $site->refresh();
             }
@@ -137,6 +156,9 @@ final class ManagePreview extends AbstractWorkflowAction
                 throw new RuntimeException('Preview provisioning or runtime configuration needs attention in Vito.');
             }
 
+            $database = (new ManagedDatabase($this->user))->ensure($site, $identity, $data['database_driver']);
+            $environment = PreviewEnvironment::render($identity, $path, $data['environment'] ?? '{}', $database, $data['ssl_enabled']);
+
             $template = app(GenerateNginxConfig::class)->defaultTemplate();
             $security = <<<'NGINX'
                 add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
@@ -145,13 +167,13 @@ final class ManagePreview extends AbstractWorkflowAction
                 charset utf-8;
             NGINX;
             $site->forceFill([
-                'ssl_enabled' => true,
-                'force_ssl' => true,
+                'ssl_enabled' => $data['ssl_enabled'],
+                'force_ssl' => $data['force_ssl'],
                 'vhost_generation_enabled' => true,
                 'vhost_template' => str_replace('charset utf-8;', $security, $template),
             ])->save();
             $hostedDomain = $site->hostedDomains()->where('domain', $identity->domain)->firstOrFail();
-            $hostedDomain->forceFill(['ssl_method' => SslMethod::CUSTOM, 'ssl_id' => $certificate->id])->save();
+            $hostedDomain->forceFill(['ssl_method' => $data['ssl_enabled'] ? SslMethod::CUSTOM : SslMethod::NONE, 'ssl_id' => $certificate?->id])->save();
             app(ActivateHostedDomain::class)->activate($hostedDomain);
 
             $ref = "refs/pull/{$identity->number}/head";
@@ -159,36 +181,71 @@ final class ManagePreview extends AbstractWorkflowAction
                 .' && test "$(git rev-parse FETCH_HEAD)" = '.escapeshellarg($data['sha']);
             $site->ssh()->exec($fetch);
 
+            $prepare = file_get_contents(__DIR__.'/../scripts/prepare.sh');
+            $prepareArguments = array_map(escapeshellarg(...), [$path, base64_encode($environment), $data['database_driver']]);
+            $server->ssh($site->user)->exec('bash -se -- '.implode(' ', $prepareArguments)." <<'VITO_PR_PREVIEW_PREPARE'\n{$prepare}\nVITO_PR_PREVIEW_PREPARE");
+
             $script = file_get_contents(__DIR__.'/../scripts/deploy.sh');
             $arguments = array_map(escapeshellarg(...), [
                 $path, (string) $identity->number, $data['sha'], $data['request_id'],
-                '/usr/bin/php'.$data['php_version'], base64_encode($environment),
+                '/usr/bin/php'.$data['php_version'],
                 ($data['seed'] ?? false) ? '1' : '0',
+                $data['deploy_script'] ?? '', $url,
             ]);
             $command = 'bash -se -- '.implode(' ', $arguments)." <<'VITO_PR_PREVIEW_SCRIPT'\n{$script}\nVITO_PR_PREVIEW_SCRIPT";
-            $server->ssh($site->user)->exec($command);
 
-            // Poll the app after Nginx's graceful reload and before reporting success.
-            $check = 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -fsSk --max-time 30 --resolve '
-                .escapeshellarg($identity->domain.':443:127.0.0.1').' '.escapeshellarg('https://'.$identity->domain.'/up')
-                .' >/dev/null && curl -fsSk --max-time 30 --resolve '.escapeshellarg($identity->domain.':443:127.0.0.1')
-                .' '.escapeshellarg('https://'.$identity->domain.'/').' >/dev/null && exit 0; sleep 1; done; exit 1';
+            if ($data['prepare_only'] ?? false) {
+                $site->ensureDeploymentScriptsExist();
+                app(UpdateDeploymentScript::class)->update($site->activeDeploymentScript(), ['script' => $command, 'restart_workers' => false]);
+                $metadata = $site->type_data['pr_preview'];
+                $metadata['pending_sha'] = $data['sha'];
+                $metadata['request_id'] = $data['request_id'];
+                $metadata['ssl_enabled'] = $data['ssl_enabled'];
+                $metadata['domain_pattern'] = $data['domain_pattern'];
+                $site->jsonUpdate('type_data', 'pr_preview', $metadata);
 
-            try {
-                $server->ssh()->exec($check);
-            } catch (Throwable $exception) {
-                $rollback = 'cd '.escapeshellarg($path).' && if test -L previous; then '
-                    .'ln -s "$(readlink previous)" current.rollback && mv -Tf current.rollback current; fi';
-                $server->ssh($site->user)->exec($rollback);
-
-                throw $exception;
+                return ['site_id' => $site->id, 'url' => $url];
             }
 
-            $site->jsonUpdate('type_data', 'pr_preview.sha', $data['sha']);
-            $this->success($server, $identity, $data);
+            $server->ssh($site->user)->exec($command);
 
-            return ['site_id' => $site->id, 'url' => "https://{$identity->domain}"];
+            return $this->finishPreview($site, $identity, $data, $url);
         });
+    }
+
+    protected function finishPreview(Site $site, PreviewIdentity $identity, array $data, string $url): array
+    {
+        $server = $site->server;
+        $path = $site->path;
+
+        // Poll the app after Nginx's graceful reload and before reporting success.
+        $port = $data['ssl_enabled'] ? '443' : '80';
+        $resolve = escapeshellarg($identity->domain.":{$port}:127.0.0.1");
+        $validateMetadata = '$data = json_decode(stream_get_contents(STDIN), true); exit(is_array($data) && ($data["sha"] ?? null) === $argv[1] && ($data["pr"] ?? null) === (int) $argv[2] ? 0 : 1);';
+        $check = 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -fsSk --max-time 30 --resolve '
+            .$resolve.' '.escapeshellarg($url.'/up')
+            .' >/dev/null && curl -fsSk --max-time 30 --resolve '.$resolve
+            .' '.escapeshellarg($url.'/').' >/dev/null && curl -fsSk --max-time 30 --resolve '.$resolve
+            .' '.escapeshellarg($url.'/__preview.json').' | '.escapeshellarg('/usr/bin/php'.$site->php_version)
+            .' -r '.escapeshellarg($validateMetadata).' '.escapeshellarg($data['sha']).' '.escapeshellarg((string) $identity->number)
+            .' && exit 0; sleep 1; done; exit 1';
+
+        try {
+            $server->ssh()->exec($check);
+        } catch (Throwable $exception) {
+            $rollback = 'cd '.escapeshellarg($path).' && if test -L previous; then '
+                .'ln -s "$(readlink previous)" current.rollback && mv -Tf current.rollback current; fi';
+            $server->ssh($site->user)->exec($rollback);
+
+            throw $exception;
+        }
+
+        $metadata = $site->type_data['pr_preview'];
+        $metadata['sha'] = $data['sha'];
+        $site->jsonUpdate('type_data', 'pr_preview', $metadata);
+        $this->success($server, $identity, $data);
+
+        return ['site_id' => $site->id, 'url' => $url];
     }
 
     private function success(Server $server, PreviewIdentity $identity, array $data): void

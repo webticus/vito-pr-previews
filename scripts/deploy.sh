@@ -1,20 +1,12 @@
 #!/usr/bin/env bash
 # Executed inline by the Vito workflow as the isolated site user.
 set -Eeuo pipefail
-app_root=$1 pr=$2 sha=$3 request_id=$4 php_bin=$5 environment_base64=$6 seed=$7
+app_root=$1 pr=$2 sha=$3 request_id=$4 php_bin=$5 seed=$6 deploy_script=$7 preview_url=$8
 cd "$app_root"
-umask 077
+umask 022
 exec 9>"$app_root/.preview-deploy.lock"
 flock -w 900 9
-mkdir -p shared/storage/app/public shared/storage/framework/cache/data \
-    shared/storage/framework/sessions shared/storage/framework/views shared/storage/logs releases
-chmod 0755 shared shared/storage shared/storage/app shared/storage/app/public releases
-if [[ ! -f shared/.env ]]; then
-    printf '%s' "$environment_base64" | base64 --decode > shared/.env
-    printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" >> shared/.env
-fi
-unset environment_base64
-umask 022
+unset GIT_HTTP_TOKEN GITHUB_TOKEN GH_TOKEN
 release="$app_root/releases/$sha-$request_id"
 mkdir -m 0755 "$release"
 git archive "$sha" | tar -x -C "$release"
@@ -23,16 +15,19 @@ rm -rf storage
 ln -s "$app_root/shared/storage" storage
 ln -s "$app_root/shared/.env" .env
 mkdir -p bootstrap/cache
-"$php_bin" /usr/local/bin/composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction --no-progress
-if [[ -f package-lock.json ]]; then
-    npm ci --no-audit --no-fund
-    npm run build
-    rm -rf node_modules
+if [[ -n $deploy_script ]]; then
+    [[ -f $deploy_script ]] || { echo 'Configured deployment script is missing from the PR.' >&2; exit 1; }
+    DEPLOY_PREVIEW=1 PHP_BIN="$php_bin" PREVIEW_APP_ROOT="$release" PREVIEW_PR_NUMBER="$pr" \
+        PREVIEW_SHA="$sha" PREVIEW_URL="$preview_url" bash "$deploy_script"
+else
+    "$php_bin" /usr/local/bin/composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction --no-progress
+    if [[ -f package-lock.json ]]; then
+        npm ci --no-audit --no-fund
+        npm run build
+    fi
+    "$php_bin" artisan migrate --force --no-interaction
 fi
-if [[ ! -f $app_root/shared/database.sqlite ]]; then
-    install -m 0600 /dev/null "$app_root/shared/database.sqlite"
-fi
-"$php_bin" artisan migrate --force --no-interaction
+rm -rf node_modules
 if [[ $seed == 1 && ! -f $app_root/shared/.preview-seeded ]]; then
     "$php_bin" artisan db:seed --force --no-interaction
     touch "$app_root/shared/.preview-seeded"

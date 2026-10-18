@@ -8,22 +8,22 @@ use InvalidArgumentException;
 
 final class PreviewEnvironment
 {
-    public static function render(PreviewIdentity $identity, string $path, string $extra): string
+    public static function render(PreviewIdentity $identity, string $path, string $extra, array $database = ['driver' => 'sqlite'], bool $sslEnabled = true): string
     {
         $values = [
             'APP_NAME' => "PR Preview {$identity->number}",
             'APP_ENV' => 'preview',
             'APP_DEBUG' => 'false',
-            'APP_URL' => "https://{$identity->domain}",
+            'APP_URL' => ($sslEnabled ? 'https://' : 'http://').$identity->domain,
             'APP_MAINTENANCE_DRIVER' => 'file',
             'LOG_CHANNEL' => 'single',
             'LOG_LEVEL' => 'warning',
-            'DB_CONNECTION' => 'sqlite',
-            'DB_DATABASE' => "{$path}/shared/database.sqlite",
+            'DB_CONNECTION' => $database['driver'],
+            'DB_DATABASE' => $database['driver'] === 'sqlite' ? "{$path}/shared/database.sqlite" : $database['database'],
             'SESSION_DRIVER' => 'file',
             'SESSION_COOKIE' => str_replace('-', '_', $identity->username),
             'SESSION_DOMAIN' => $identity->domain,
-            'SESSION_SECURE_COOKIE' => 'true',
+            'SESSION_SECURE_COOKIE' => $sslEnabled ? 'true' : 'false',
             'SESSION_ENCRYPT' => 'true',
             'CACHE_STORE' => 'file',
             'CACHE_PREFIX' => $identity->username,
@@ -34,6 +34,11 @@ final class PreviewEnvironment
             'MAIL_FROM_ADDRESS' => 'preview@example.invalid',
             'MAIL_FROM_NAME' => 'PR Preview',
         ];
+        if ($database['driver'] !== 'sqlite') {
+            foreach (['host', 'port', 'username', 'password'] as $key) {
+                $values['DB_'.strtoupper($key)] = $database[$key];
+            }
+        }
         $additional = json_decode($extra, true, 32, JSON_THROW_ON_ERROR);
 
         if (! is_array($additional) || ($additional !== [] && array_is_list($additional))) {
