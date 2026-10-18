@@ -4,6 +4,7 @@ plugin_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT
 mkdir -p "$fixture/shared/storage/framework" "$fixture/releases" "$fixture/public"
+printf '<?php\n' > "$fixture/public/index.php"
 printf 'APP_ENV=preview\n' > "$fixture/shared/.env"
 printf 'test-secret' > "$fixture/shared/.maintenance-secret"
 cat > "$fixture/deploy-fixture.sh" <<'SCRIPT'
