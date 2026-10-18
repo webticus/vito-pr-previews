@@ -51,11 +51,7 @@ if [[ -n $previous ]]; then
 fi
 ln -s "$release" "$app_root/current.next"
 mv -Tf "$app_root/current.next" "$app_root/current"
-kept=0
 while IFS= read -r directory; do
-    [[ $directory == "$release" ]] && continue
-    kept=$((kept + 1))
-    if (( kept > 1 )); then
-        rm -rf -- "$directory"
-    fi
-done < <(find "$app_root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
+    [[ $directory == "$release" || $directory == "$previous" ]] && continue
+    rm -rf -- "$directory"
+done < <(find "$app_root/releases" -mindepth 1 -maxdepth 1 -type d)

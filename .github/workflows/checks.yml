@@ -19,7 +19,8 @@ jobs:
           bash -n scripts/deploy.sh
           bash -n scripts/prepare.sh
           shellcheck scripts/*.sh
-          shellcheck tests/prepare.sh
+          shellcheck tests/*.sh
           bash tests/prepare.sh
+          bash tests/deploy.sh
       - name: Check GitHub deployment failure handling
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s github -p test_preview.py
