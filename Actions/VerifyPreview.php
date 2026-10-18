@@ -29,6 +29,11 @@ final class VerifyPreview extends ManagePreview
         }
 
         $deployment = $site->deployments()->findOrFail($input['deployment_id']);
+        $deadline = time() + 1200;
+        while ($deployment->status === DeploymentStatus::DEPLOYING && time() < $deadline) {
+            usleep(500000);
+            $deployment->refresh();
+        }
         if ($deployment->status !== DeploymentStatus::FINISHED) {
             throw new RuntimeException('Native deployment failed; inspect the site deployment log.');
         }

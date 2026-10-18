@@ -20,6 +20,7 @@ use App\Vito\Plugins\Webticus\VitoPrPreviews\Support\PreviewEnvironment;
 use App\Vito\Plugins\Webticus\VitoPrPreviews\Support\PreviewIdentity;
 use App\WorkflowActions\AbstractWorkflowAction;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use RuntimeException;
@@ -59,6 +60,17 @@ class ManagePreview extends AbstractWorkflowAction
     }
 
     public function run(array $input): array
+    {
+        $previous = Queue::getDefaultDriver();
+        Queue::setDefaultDriver('sync');
+        try {
+            return $this->manage($input);
+        } finally {
+            Queue::setDefaultDriver($previous);
+        }
+    }
+
+    protected function manage(array $input): array
     {
         $data = Validator::make($input, [
             'operation' => ['required', Rule::in(['deploy', 'destroy'])],
