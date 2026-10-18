@@ -73,11 +73,11 @@ Merge this workflow into your default branch. Open a PR: a comment contains its 
 ## Database options
 
 ```yaml
-database-driver: mariadb # mariadb, mysql, or sqlite
+database-driver: mariadb # mariadb, mysql, sqlite, or external
 seed: 'true'             # Optional: seed a fresh preview database once.
 ```
 
-MariaDB/MySQL use Vito's default database service on the app server. The plugin creates a database and a localhost-only user for each PR, preserves them on updates, and deletes both on cleanup. SQLite needs the SQLite PHP extension. To change an existing preview's database driver, remove and recreate that preview.
+MariaDB/MySQL use Vito's default database service on the app server. The plugin creates a database and a localhost-only user for each PR, preserves them on updates, and deletes both on cleanup. SQLite needs the SQLite PHP extension. To use your own database, select `external` and provide `DB_*` values in `environment`; the plugin never creates or deletes external databases. To change a preview's driver, remove and recreate it.
 
 ## SSL options
 
@@ -112,7 +112,7 @@ The native **Deploy Site** action runs it inside the prepared PR release, as the
 environment: '{"APP_LOCALE":"bg","TURNSTILE_HOSTNAMES":"{domain}"}'
 ```
 
-`{domain}` and `{pr}` are expanded. Database, mail, session, cache, queue, AWS, and Redis settings are protected. All previews use the configurable `site-user` (`pr-previews` by default), which is retained after cleanup. Use a dedicated preview user per repository; its PRs share filesystem permissions. One read-only GitHub deploy key is reused for that user and retained after PR cleanup. GitHub App connections need no deploy key. Every preview gets its own app key, storage, cache, and database; mail is logged and no scheduler or queue worker is started. Production environment files are never copied.
+`{domain}` and `{pr}` are expanded. Every generated environment value can be overridden, including `DB_*`, `MAIL_*`, `SESSION_*`, `CACHE_*`, `QUEUE_*`, `AWS_*`, `REDIS_*`, and `APP_KEY`. Use `environment: ${{ secrets.PREVIEW_ENVIRONMENT }}` for a secret JSON object. All previews use the configurable `site-user` (`pr-previews` by default), which is retained after cleanup. Use a dedicated preview user per repository; its PRs share filesystem permissions. One read-only GitHub deploy key is reused for that user and retained after PR cleanup. GitHub App connections need no deploy key. By default, each preview gets its own app key, storage, cache, and database; mail is logged and no scheduler or queue worker is started. Production environment files are never copied.
 
 Laravel routes are protected with `artisan down --secret` by default; the stable bypass link is updated in one PR comment. Set `maintenance-protection: 'false'` for public previews. Static files remain accessible, and anyone who can read the comment can unlock the app. All responses include noindex. Only same-repository PRs run automatically. A failed HTTP health check restores the previous release when available; migrations are not reversed.
 

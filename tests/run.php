@@ -60,9 +60,15 @@ $http = PreviewEnvironment::render($identity, '/home/preview/app', '{}', sslEnab
 check(str_contains($http, 'APP_URL="http://website-pr-12.example.com"'), 'SSL must be optional.');
 check(str_contains($http, 'SESSION_SECURE_COOKIE="false"'), 'HTTP previews must have usable session cookies.');
 
-foreach (['DB_HOST', 'MAIL_MAILER', 'APP_DEBUG', 'APP_KEY', 'QUEUE_CONNECTION', 'AWS_SECRET_ACCESS_KEY'] as $key) {
-    rejects(fn () => PreviewEnvironment::render($identity, '/home/preview/app', json_encode([$key => 'unsafe'], JSON_THROW_ON_ERROR)));
+$custom = PreviewEnvironment::render($identity, '/home/preview/app', json_encode([
+    'DB_HOST' => 'db.example.com', 'DB_DATABASE' => 'custom', 'MAIL_MAILER' => 'smtp',
+    'SESSION_DRIVER' => 'redis', 'CACHE_STORE' => 'redis', 'QUEUE_CONNECTION' => 'redis',
+    'REDIS_HOST' => 'redis.example.com', 'AWS_SECRET_ACCESS_KEY' => 'example', 'APP_DEBUG' => true, 'APP_KEY' => 'custom-key',
+], JSON_THROW_ON_ERROR), ['driver' => 'external']);
+foreach (['DB_HOST="db.example.com"', 'DB_DATABASE="custom"', 'MAIL_MAILER="smtp"', 'QUEUE_CONNECTION="redis"', 'AWS_SECRET_ACCESS_KEY="example"', 'APP_KEY="custom-key"', 'APP_DEBUG="true"'] as $expected) {
+    check(str_contains($custom, $expected), 'Explicit environment settings must override defaults.');
 }
+check(! str_contains($custom, 'DB_USERNAME='), 'External database credentials must come entirely from the configuration.');
 
 rejects(fn () => PreviewEnvironment::render($identity, '/home/preview/app', '{"NAME":"line\nINJECTED=value"}'));
 rejects(fn () => PreviewEnvironment::render($identity, '/home/preview/app', '["value"]'));

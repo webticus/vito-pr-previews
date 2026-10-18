@@ -31,8 +31,8 @@ final readonly class ManagedDatabase
         $metadata['database_driver'] = $driver;
         $site->jsonUpdate('type_data', 'pr_preview', $metadata);
 
-        if ($driver === 'sqlite') {
-            return ['driver' => 'sqlite'];
+        if (in_array($driver, ['sqlite', 'external'], true)) {
+            return ['driver' => $driver];
         }
 
         $server = $site->server;

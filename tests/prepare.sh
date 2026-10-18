@@ -16,3 +16,7 @@ grep -q 'APP_URL="http://pr-1.example.com"' "$fixture/shared/.env"
 php -r 'exit((fileperms($argv[1]) & 0777) === 0600 ? 0 : 1);' "$fixture/shared/.env"
 [[ $(cat "$fixture/shared/.maintenance-secret") == test-secret ]]
 printf 'Environment refresh preserves the key and private permissions.\n'
+custom=$(printf 'APP_ENV="preview"\nAPP_KEY="custom-key"\n' | base64)
+bash "$plugin_root/scripts/prepare.sh" "$fixture" "$custom" external test-secret
+[[ $(sed -n '/^APP_KEY=/p' "$fixture/shared/.env") == 'APP_KEY="custom-key"' ]]
+printf 'Explicit APP_KEY overrides are respected.\n'

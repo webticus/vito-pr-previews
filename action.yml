@@ -48,10 +48,10 @@ inputs:
     description: Redirect HTTP to HTTPS when SSL is enabled
     default: 'true'
   database-driver:
-    description: sqlite, mariadb, or mysql; SQL databases and users are created and removed per PR
+    description: sqlite, mariadb, mysql, or external; external databases are never created or deleted
     default: sqlite
   environment:
-    description: JSON object of app-specific environment values
+    description: JSON object of environment values; overrides all generated defaults
     default: '{}'
   seed:
     description: Seed each fresh preview database once
