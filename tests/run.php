@@ -28,8 +28,11 @@ function rejects(Closure $callback): void
 
 $identity = new PreviewIdentity('example/website', 12, 'website-pr-{pr}.example.com');
 check($identity->domain === 'website-pr-12.example.com', 'Preview domain must include the PR number.');
-check($identity->username !== (new PreviewIdentity('example/other', 12, 'other-pr-{pr}.example.com'))->username, 'Repositories must have distinct users.');
-check(strlen((new PreviewIdentity('example/website', 9999999, 'pr-{pr}.example.com'))->username) <= 32, 'Linux usernames must remain valid.');
+check($identity->username === (new PreviewIdentity('example/website', 13, 'website-pr-{pr}.example.com'))->username, 'PRs must share the configured site user.');
+check((new PreviewIdentity('example/website', 13, 'website-pr-{pr}.example.com', 'custom-previews'))->username === 'custom-previews', 'The shared user must be configurable.');
+check($identity->resourceName !== (new PreviewIdentity('example/website', 13, 'website-pr-{pr}.example.com'))->resourceName, 'Databases must stay distinct across PRs.');
+check($identity->resourceName !== (new PreviewIdentity('example/other', 12, 'other-pr-{pr}.example.com'))->resourceName, 'Databases must stay distinct across repositories.');
+rejects(fn () => new PreviewIdentity('example/website', 12, 'pr-{pr}.example.com', 'invalid;id'));
 
 foreach (['*.example.com', 'pr-{pr}-{pr}.example.com', 'pr-{pr}.example.com;id', 'pr-{pr}.-example.com'] as $pattern) {
     rejects(fn () => new PreviewIdentity('example/website', 12, $pattern));

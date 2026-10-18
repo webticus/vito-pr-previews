@@ -32,8 +32,17 @@ if [[ $seed == 1 && ! -f $app_root/shared/.preview-seeded ]]; then
     "$php_bin" artisan db:seed --force --no-interaction
     touch "$app_root/shared/.preview-seeded"
 fi
-"$php_bin" artisan storage:link --no-interaction
+if [[ ! -L public/storage ]]; then
+    "$php_bin" artisan storage:link --no-interaction
+fi
 "$php_bin" artisan optimize --no-interaction
+maintenance_secret=$(cat "$app_root/shared/.maintenance-secret")
+if [[ -n $maintenance_secret ]]; then
+    "$php_bin" artisan down --secret="$maintenance_secret" --no-interaction --quiet
+else
+    "$php_bin" artisan up --no-interaction --quiet
+fi
+unset maintenance_secret
 printf '{"sha":"%s","pr":%s}\n' "$sha" "$pr" > public/__preview.json
 previous=$(readlink "$app_root/current" || true)
 if [[ -n $previous ]]; then

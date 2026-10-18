@@ -50,6 +50,25 @@ class PreviewTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 preview.run_vito(FakeVito("completed", marker.replace(request_id, "c" * 32)), 2, 1, "deploy", 12, "a" * 40)
 
+    def test_access_secret_survives_updates_and_is_distinct_per_pr(self):
+        secret = preview.maintenance_secret("api-token", "example/app", 12)
+        self.assertEqual(secret, preview.maintenance_secret("api-token", "example/app", 12))
+        self.assertNotEqual(secret, preview.maintenance_secret("api-token", "example/app", 13))
+        self.assertNotEqual(secret, preview.maintenance_secret("other-token", "example/app", 12))
+
+    def test_updates_bot_comment_without_overwriting_human_comments(self):
+        from unittest.mock import Mock
+        github = Mock()
+        github.request.return_value = [
+            {"id": 1, "user": {"login": "human"}, "body": "<!-- vito-pr-preview --> human note"},
+            {"id": 2, "user": {"login": "github-actions[bot]"}, "body": "<!-- vito-pr-preview --> old preview"},
+        ]
+        preview.preview_comment(github, "example/app", 12, "https://preview.example.com", "secret", "a" * 40)
+        self.assertEqual(github.request.call_args.args[:2], ("/repos/example/app/issues/comments/2", "PATCH"))
+        self.assertIn("https://preview.example.com/secret", github.request.call_args.args[2]["body"])
+        preview.preview_comment(github, "example/app", 12)
+        self.assertNotIn("https://", github.request.call_args.args[2]["body"])
+
     def test_timeout_does_not_report_success(self):
         with self.assertRaisesRegex(RuntimeError, "timed out"):
             preview.run_vito(FakeVito("running", ""), 2, 1, "deploy", 12, "a" * 40, timeout=0)

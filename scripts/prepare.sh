@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-app_root=$1 environment_base64=$2 database_driver=$3
+app_root=$1 environment_base64=$2 database_driver=$3 maintenance_secret=${4:-} php_bin=${5:-php}
 cd "$app_root"
 umask 077
 mkdir -p shared/storage/app/public shared/storage/framework/cache/data \
@@ -18,4 +18,11 @@ chmod 600 shared/.env.next
 mv -f shared/.env.next shared/.env
 if [[ $database_driver == sqlite && ! -f shared/database.sqlite ]]; then
     install -m 0600 /dev/null shared/database.sqlite
+fi
+
+printf '%s' "$maintenance_secret" > shared/.maintenance-secret.next
+chmod 600 shared/.maintenance-secret.next
+mv -f shared/.maintenance-secret.next shared/.maintenance-secret
+if [[ -n $maintenance_secret && -f current/artisan ]]; then
+    "$php_bin" current/artisan down --secret="$maintenance_secret" --no-interaction --quiet
 fi

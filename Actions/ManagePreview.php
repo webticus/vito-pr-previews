@@ -6,7 +6,6 @@ namespace App\Vito\Plugins\Webticus\VitoPrPreviews\Actions;
 
 use App\Actions\HostedDomain\ActivateHostedDomain;
 use App\Actions\Site\CreateSite;
-use App\Actions\Site\DeleteSite;
 use App\Actions\Site\UpdateDeploymentScript;
 use App\Actions\SSL\AssignSslToDomains;
 use App\Actions\Webserver\GenerateNginxConfig;
@@ -15,6 +14,7 @@ use App\Enums\SslMethod;
 use App\Models\Server;
 use App\Models\Site;
 use App\Models\Ssl;
+use App\Vito\Plugins\Webticus\VitoPrPreviews\Support\DeletePreview;
 use App\Vito\Plugins\Webticus\VitoPrPreviews\Support\ManagedDatabase;
 use App\Vito\Plugins\Webticus\VitoPrPreviews\Support\PreviewEnvironment;
 use App\Vito\Plugins\Webticus\VitoPrPreviews\Support\PreviewIdentity;
@@ -36,6 +36,9 @@ class ManagePreview extends AbstractWorkflowAction
             'repository' => 'GitHub repository in owner/name format',
             'base_branch' => 'Default branch used for the initial clone, e.g. main',
             'domain_pattern' => 'Preview hostname with one {pr} placeholder, e.g. pr-{pr}.example.com',
+            'site_user' => 'Shared Linux user for all previews (default pr-previews)',
+            'maintenance_protection' => 'Require a Laravel maintenance bypass secret (boolean; default true)',
+            'maintenance_secret' => 'Stable 64-character hexadecimal bypass secret supplied by GitHub',
             'php_version' => 'Installed PHP version, e.g. 8.4',
             'ssl_id' => 'Saved server SSL ID, or omit to select a matching saved certificate',
             'ssl_enabled' => 'Enable HTTPS (boolean; default true); false requires no certificate',
@@ -65,6 +68,9 @@ class ManagePreview extends AbstractWorkflowAction
             'base_branch' => ['required_if:operation,deploy', 'string', 'max:200'],
             'domain_pattern' => ['required', 'string', 'max:253'],
             'php_version' => ['required_if:operation,deploy', 'regex:/\A8\.[3-9]\z/'],
+            'site_user' => ['nullable', 'string', 'regex:/\A[a-z_][a-z0-9_-]{1,30}[a-z0-9]\z/'],
+            'maintenance_protection' => ['nullable', 'boolean'],
+            'maintenance_secret' => ['nullable', 'regex:/\A[a-f0-9]{64}\z/'],
             'ssl_id' => ['nullable', 'integer', 'min:1'],
             'ssl_enabled' => ['nullable', 'boolean'],
             'force_ssl' => ['nullable', 'boolean'],
@@ -78,10 +84,14 @@ class ManagePreview extends AbstractWorkflowAction
             'seed' => ['nullable', 'boolean'],
         ])->validate();
 
-        $identity = new PreviewIdentity($data['repository'], (int) $data['pr_number'], $data['domain_pattern']);
+        $identity = new PreviewIdentity($data['repository'], (int) $data['pr_number'], $data['domain_pattern'], $data['site_user'] ?? 'pr-previews');
         $data['ssl_enabled'] = (bool) ($data['ssl_enabled'] ?? true);
         $data['force_ssl'] = $data['ssl_enabled'] && (bool) ($data['force_ssl'] ?? true);
         $data['database_driver'] ??= 'sqlite';
+        $data['maintenance_protection'] = (bool) ($data['maintenance_protection'] ?? true);
+        if ($data['operation'] === 'deploy' && $data['maintenance_protection'] && empty($data['maintenance_secret'])) {
+            throw new RuntimeException('Protected previews require a maintenance_secret.');
+        }
         $url = ($data['ssl_enabled'] ? 'https://' : 'http://').$identity->domain;
         $server = Server::query()->findOrFail($data['server_id']);
         $this->authorize('update', $server);
@@ -92,7 +102,7 @@ class ManagePreview extends AbstractWorkflowAction
             throw new RuntimeException('The server must belong to this workflow project and use Nginx.');
         }
 
-        $lock = "pr-previews:{$server->id}:{$identity->username}";
+        $lock = "pr-previews:{$server->id}:{$identity->resourceName}";
 
         return Cache::lock($lock, 1800)->block(30, function () use ($server, $data, $identity, $url): array {
             $site = $server->sites()->where('domain', $identity->domain)->first();
@@ -107,7 +117,7 @@ class ManagePreview extends AbstractWorkflowAction
                 if ($site instanceof Site) {
                     $this->authorize('delete', [$site, $server]);
                     (new ManagedDatabase($this->user))->destroy($site, $identity);
-                    app(DeleteSite::class)->delete($site, ['domain' => $identity->domain]);
+                    (new DeletePreview)->delete($site);
                 }
 
                 $this->success($server, $identity, $data);
@@ -133,7 +143,7 @@ class ManagePreview extends AbstractWorkflowAction
             if (! $site instanceof Site) {
                 $this->authorize('create', [Site::class, $server]);
                 $site = app(CreateSite::class)->create($server, [
-                    'type' => 'php',
+                    'type' => 'pr-preview',
                     'domain' => $identity->domain,
                     'user' => $identity->username,
                     'php_version' => $data['php_version'],
@@ -145,7 +155,7 @@ class ManagePreview extends AbstractWorkflowAction
                     'package_manager' => 'none',
                 ]);
                 $site->jsonUpdate('type_data', 'pr_preview', [
-                    'repository' => $identity->repository, 'number' => $identity->number, 'domain_pattern' => $data['domain_pattern'],
+                    'repository' => $identity->repository, 'number' => $identity->number, 'domain_pattern' => $data['domain_pattern'], 'site_user' => $identity->username,
                 ]);
                 $site->refresh();
             }
@@ -182,7 +192,7 @@ class ManagePreview extends AbstractWorkflowAction
             $site->ssh()->exec($fetch);
 
             $prepare = file_get_contents(__DIR__.'/../scripts/prepare.sh');
-            $prepareArguments = array_map(escapeshellarg(...), [$path, base64_encode($environment), $data['database_driver']]);
+            $prepareArguments = array_map(escapeshellarg(...), [$path, base64_encode($environment), $data['database_driver'], $data['maintenance_protection'] ? $data['maintenance_secret'] : '', '/usr/bin/php'.$data['php_version']]);
             $server->ssh($site->user)->exec('bash -se -- '.implode(' ', $prepareArguments)." <<'VITO_PR_PREVIEW_PREPARE'\n{$prepare}\nVITO_PR_PREVIEW_PREPARE");
 
             $script = file_get_contents(__DIR__.'/../scripts/deploy.sh');
@@ -201,6 +211,7 @@ class ManagePreview extends AbstractWorkflowAction
                 $metadata['pending_sha'] = $data['sha'];
                 $metadata['request_id'] = $data['request_id'];
                 $metadata['ssl_enabled'] = $data['ssl_enabled'];
+                $metadata['maintenance_protection'] = $data['maintenance_protection'];
                 $metadata['domain_pattern'] = $data['domain_pattern'];
                 $site->jsonUpdate('type_data', 'pr_preview', $metadata);
 
@@ -222,10 +233,18 @@ class ManagePreview extends AbstractWorkflowAction
         $port = $data['ssl_enabled'] ? '443' : '80';
         $resolve = escapeshellarg($identity->domain.":{$port}:127.0.0.1");
         $validateMetadata = '$data = json_decode(stream_get_contents(STDIN), true); exit(is_array($data) && ($data["sha"] ?? null) === $argv[1] && ($data["pr"] ?? null) === (int) $argv[2] ? 0 : 1);';
-        $check = 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -fsSk --max-time 30 --resolve '
-            .$resolve.' '.escapeshellarg($url.'/up')
-            .' >/dev/null && curl -fsSk --max-time 30 --resolve '.$resolve
-            .' '.escapeshellarg($url.'/').' >/dev/null && curl -fsSk --max-time 30 --resolve '.$resolve
+        $curl = 'curl -fsSk --max-time 30 --resolve '.$resolve;
+        $authenticate = '';
+        $protectedCheck = '';
+        $cookie = '';
+        if ($data['maintenance_protection'] ?? true) {
+            $makeCookie = '$key = trim(file_get_contents($argv[1])); $expires = time() + 600; echo "laravel_maintenance=".base64_encode(json_encode(["expires_at" => $expires, "mac" => hash_hmac("sha256", (string) $expires, $key)]));';
+            $authenticate = 'cookie=$('.escapeshellarg('/usr/bin/php'.$site->php_version).' -r '.escapeshellarg($makeCookie).' '.escapeshellarg($path.'/shared/.maintenance-secret').'); ';
+            $cookie = ' -H "Cookie: $cookie"';
+            $protectedCheck = 'test "$(curl -sSk --max-time 30 --resolve '.$resolve.' -o /dev/null -w "%{http_code}" '.escapeshellarg($url.'/').')" = 503 && ';
+        }
+        $check = $authenticate.'for attempt in 1 2 3 4 5 6 7 8 9 10; do '.$protectedCheck.$curl.$cookie.' '.escapeshellarg($url.'/up')
+            .' >/dev/null && '.$curl.$cookie.' '.escapeshellarg($url.'/').' >/dev/null && '.$curl.$cookie
             .' '.escapeshellarg($url.'/__preview.json').' | '.escapeshellarg('/usr/bin/php'.$site->php_version)
             .' -r '.escapeshellarg($validateMetadata).' '.escapeshellarg($data['sha']).' '.escapeshellarg((string) $identity->number)
             .' && exit 0; sleep 1; done; exit 1';

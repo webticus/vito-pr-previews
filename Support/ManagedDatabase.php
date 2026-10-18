@@ -43,7 +43,7 @@ final readonly class ManagedDatabase
             throw new RuntimeException('The requested MySQL/MariaDB service must be installed as the server default database.');
         }
 
-        $name = str_replace('-', '', $identity->username);
+        $name = $identity->resourceName;
         $database = isset($metadata['database_id']) ? $server->databases()->find($metadata['database_id']) : null;
 
         if (! $database) {
@@ -92,7 +92,7 @@ final readonly class ManagedDatabase
     {
         $metadata = $site->type_data['pr_preview'];
         $server = $site->server;
-        $name = str_replace('-', '', $identity->username);
+        $name = $identity->resourceName;
         $database = isset($metadata['database_id']) ? $server->databases()->find($metadata['database_id']) : null;
         $user = isset($metadata['database_user_id']) ? $server->databaseUsers()->find($metadata['database_user_id']) : null;
 

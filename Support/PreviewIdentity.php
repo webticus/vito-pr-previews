@@ -12,7 +12,9 @@ final readonly class PreviewIdentity
 
     public string $username;
 
-    public function __construct(public string $repository, public int $number, string $pattern)
+    public string $resourceName;
+
+    public function __construct(public string $repository, public int $number, string $pattern, string $siteUser = 'pr-previews')
     {
         if (! preg_match('/\A[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\z/', $repository) || $number < 1 || $number > 9999999) {
             throw new InvalidArgumentException('A repository in owner/name format and a positive PR number are required.');
@@ -29,7 +31,12 @@ final readonly class PreviewIdentity
         }
 
         $this->domain = $domain;
-        $this->username = 'prv-'.substr(hash('sha256', strtolower($repository)), 0, 8)."-{$number}";
+        if (! preg_match('/\A[a-z_][a-z0-9_-]{1,30}[a-z0-9]\z/', $siteUser)) {
+            throw new InvalidArgumentException('A valid shared Linux site user is required (3-32 characters).');
+        }
+
+        $this->username = $siteUser;
+        $this->resourceName = 'prv'.substr(hash('sha256', strtolower($repository)), 0, 8).$number;
     }
 
     public function marker(string $requestId, string $operation, string $sha): string

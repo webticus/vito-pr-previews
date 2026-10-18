@@ -32,6 +32,12 @@ inputs:
   php-version:
     description: PHP version installed on the server
     required: true
+  site-user:
+    description: Shared Linux user for all preview sites; Vito creates it when needed and cleanup retains it
+    default: pr-previews
+  maintenance-protection:
+    description: Protect Laravel routes with a stable bypass secret posted in the PR comment
+    default: 'true'
   ssl-id:
     description: Optional saved server certificate ID
     default: ''
@@ -54,7 +60,7 @@ inputs:
     description: Required for manual dispatch; otherwise taken from the PR event
     default: ''
   github-token:
-    description: GitHub token with contents/read, pull-requests/read, and deployments/write
+    description: GitHub token with contents/read, pull-requests/write, and deployments/write
     default: ${{ github.token }}
 
 runs:
@@ -74,6 +80,8 @@ runs:
         VITO_SOURCE_CONTROL_ID: ${{ inputs.source-control-id }}
         VITO_DOMAIN_PATTERN: ${{ inputs.domain-pattern }}
         VITO_PHP_VERSION: ${{ inputs.php-version }}
+        VITO_SITE_USER: ${{ inputs.site-user }}
+        VITO_MAINTENANCE_PROTECTION: ${{ inputs.maintenance-protection }}
         VITO_SSL_ID: ${{ inputs.ssl-id }}
         VITO_SSL_ENABLED: ${{ inputs.ssl-enabled }}
         VITO_FORCE_SSL: ${{ inputs.force-ssl }}

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Trigger Vito's trusted lifecycle workflows and publish GitHub deployments."""
 
+from http.cookiejar import CookieJar
+import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
 import re
 import time
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 import uuid
 
 
@@ -81,15 +84,55 @@ def run_vito(vito, project, workflow, operation, number, sha, timeout=1500, conf
     raise RuntimeError(f"Vito run {run_id} timed out; check Vito before retrying.")
 
 
-def verify_preview(url, number, sha):
+def maintenance_secret(token, repository, number):
+    return hmac.new(token.encode(), f"vito-pr-previews:{repository.lower()}:{number}".encode(), hashlib.sha256).hexdigest()
+
+
+def preview_comment(github, repository, number, url=None, secret=None, sha=None):
+    marker = "<!-- vito-pr-preview -->"
+    body = marker + "\n"
+    if url is None:
+        body += "Preview removed. Its site and dedicated database have been deleted."
+    else:
+        link = url + "/" + secret if secret else url
+        body += f"[Open {'protected ' if secret else ''}preview]({link}) · `{sha[:7]}`"
+        if secret:
+            body += f"\n\nAccess secret: `{secret}`\n\nThe link unlocks this preview in your browser."
+    page = 1
+    while True:
+        comments = github.request(f"/repos/{repository}/issues/{number}/comments?per_page=100&page={page}")
+        for comment in comments:
+            if comment.get("user", {}).get("login") == "github-actions[bot]" and comment.get("body", "").startswith(marker):
+                github.request(f"/repos/{repository}/issues/comments/{comment['id']}", "PATCH", {"body": body})
+                return
+        if len(comments) < 100:
+            break
+        page += 1
+    github.request(f"/repos/{repository}/issues/{number}/comments", "POST", {"body": body})
+
+
+def verify_preview(url, number, sha, secret=None):
     headers = {"Cache-Control": "no-cache", "User-Agent": "VitoPRPreviews/0.1", "Accept": "*/*"}
     for attempt in range(12):
         try:
-            with urlopen(Request(url + "/__preview.json", headers=headers), timeout=30) as response:
+            client = build_opener(HTTPCookieProcessor(CookieJar()))
+            if secret:
+                try:
+                    with client.open(Request(url + "/", headers=headers), timeout=30):
+                        pass
+                except HTTPError as error:
+                    if error.code != 503:
+                        raise
+                else:
+                    raise RuntimeError("Preview is accessible without its maintenance secret.")
+                with client.open(Request(url + "/" + secret, headers=headers), timeout=30) as response:
+                    if response.status != 200:
+                        raise ValueError("Preview bypass failed.")
+            with client.open(Request(url + "/__preview.json", headers=headers), timeout=30) as response:
                 metadata = json.load(response)
                 robots = response.headers.get("X-Robots-Tag", "")
             if metadata == {"sha": sha, "pr": number} and "noindex" in robots:
-                with urlopen(Request(url + "/up", headers=headers), timeout=30) as response:
+                with client.open(Request(url + "/up", headers=headers), timeout=30) as response:
                     if response.status == 200:
                         return
         except (HTTPError, URLError, TimeoutError, ValueError):
@@ -151,6 +194,8 @@ def main():
         "environment": os.environ.get("VITO_ENVIRONMENT", "{}"),
         "seed": os.environ.get("VITO_SEED", "false").lower() == "true",
         "database_driver": os.environ.get("VITO_DATABASE_DRIVER", "sqlite"),
+        "site_user": os.environ.get("VITO_SITE_USER", "pr-previews"),
+        "maintenance_protection": os.environ.get("VITO_MAINTENANCE_PROTECTION", "true").lower() == "true",
         "ssl_enabled": ssl_enabled,
         "force_ssl": os.environ.get("VITO_FORCE_SSL", "true").lower() == "true",
     }
@@ -159,15 +204,23 @@ def main():
     if os.environ.get("VITO_SSL_ID"):
         configuration["ssl_id"] = int(os.environ["VITO_SSL_ID"])
 
+    secret = None
+    if operation == "deploy" and configuration["maintenance_protection"]:
+        secret = maintenance_secret(os.environ["VITO_API_TOKEN"], repository, number)
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print("::add-mask::" + secret, flush=True)
+        configuration["maintenance_secret"] = secret
+
     if operation == "destroy":
         run_vito(vito, project, workflow, operation, number, sha, configuration=configuration)
         deactivate_deployments(github, repository, environment, log_url)
+        preview_comment(github, repository, number)
         print(f"Removed preview for PR #{number}.")
     else:
         deployment = github.request(f"/repos/{repository}/deployments", "POST", {
             "ref": sha,
             "environment": environment,
-            "description": f"Burzsait PR #{number}",
+            "description": f"PR #{number} preview",
             "auto_merge": False,
             "required_contexts": [],
             "transient_environment": True,
@@ -176,13 +229,15 @@ def main():
         deployment_status(github, repository, deployment, "in_progress", url, log_url)
         try:
             run_vito(vito, project, workflow, operation, number, sha, configuration=configuration)
-            verify_preview(url, number, sha)
+            verify_preview(url, number, sha, secret)
             # Closing a PR during a slow build must still remove its preview.
             latest = github.request(f"/repos/{repository}/pulls/{number}")
             if latest["state"] != "open":
                 run_vito(vito, project, cleanup_workflow, "destroy", number, sha, configuration=configuration)
                 deactivate_deployments(github, repository, environment, log_url)
+                preview_comment(github, repository, number)
                 return
+            preview_comment(github, repository, number, url, secret, sha)
             deployment_status(github, repository, deployment, "success", url, log_url)
         except Exception:
             deployment_status(github, repository, deployment, "failure", url, log_url)

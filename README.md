@@ -40,7 +40,7 @@ on:
         type: string
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
   deployments: write
 concurrency:
   group: preview-${{ github.event.pull_request.number || inputs.pr_number }}
@@ -62,12 +62,13 @@ jobs:
           cleanup-workflow-id: '2'
           domain-pattern: pr-{pr}.preview.example.com
           php-version: '8.5'
+          site-user: previews
           database-driver: mariadb
           ssl-id: '1'
           pr-number: ${{ inputs.pr_number }}
 ```
 
-Merge this workflow into your default branch. Open a PR: its GitHub deployment link will point to `pr-123.preview.example.com`. Further commits update that URL; closing or merging the PR removes the site and its dedicated database/user.
+Merge this workflow into your default branch. Open a PR: a comment contains its protected preview link and access secret. Further commits update that URL; closing or merging the PR removes the site and its dedicated database/user.
 
 ## Database options
 
@@ -103,7 +104,7 @@ For Cloudflare proxied DNS, a saved matching Origin CA certificate works. The pl
 deploy-script: deploy.sh # Optional; otherwise the plugin builds and migrates Laravel.
 ```
 
-The native **Deploy Site** action runs it inside the prepared PR release, as the preview user, with `DEPLOY_PREVIEW=1`, `PREVIEW_SHA`, `PREVIEW_URL`, and `PHP_BIN`. Your script should install dependencies, build assets, and migrate the preview database. It must handle preview mode and avoid pulling another branch. The plugin handles the release switch and verification.
+The native **Deploy Site** action runs it inside the prepared PR release, as the preview user, with `DEPLOY_PREVIEW=1`, `PREVIEW_SHA`, `PREVIEW_URL`, and `PHP_BIN`. Keep maintenance mode enabled when `DEPLOY_PREVIEW=1`. Your script should install dependencies, build assets, and migrate the preview database. It must handle preview mode and avoid pulling another branch. The plugin handles the release switch and verification.
 
 ## App-specific settings
 
@@ -111,8 +112,8 @@ The native **Deploy Site** action runs it inside the prepared PR release, as the
 environment: '{"APP_LOCALE":"bg","TURNSTILE_HOSTNAMES":"{domain}"}'
 ```
 
-`{domain}` and `{pr}` are expanded. Database, mail, session, cache, queue, AWS, and Redis settings are protected. Every preview gets its own app key, storage, cache, and database; mail is logged and no scheduler or queue worker is started. Production environment files are never copied.
+`{domain}` and `{pr}` are expanded. Database, mail, session, cache, queue, AWS, and Redis settings are protected. All previews use the configurable `site-user` (`pr-previews` by default), which is retained after cleanup. Use a dedicated preview user; its PRs share filesystem permissions. Every preview gets its own app key, storage, cache, and database; mail is logged and no scheduler or queue worker is started. Production environment files are never copied.
 
-Previews are public URLs with noindex protection. Only same-repository PRs run automatically. A failed HTTP health check restores the previous release when available; migrations are not reversed.
+Laravel routes are protected with `artisan down --secret` by default; the stable bypass link is updated in one PR comment. Set `maintenance-protection: 'false'` for public previews. Static files remain accessible, and anyone who can read the comment can unlock the app. All responses include noindex. Only same-repository PRs run automatically. A failed HTTP health check restores the previous release when available; migrations are not reversed.
 
 MIT licensed. Run checks with `php tests/run.php`, `python3 -m unittest discover -s github -p test_preview.py`, and `shellcheck scripts/deploy.sh`.
