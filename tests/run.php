@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 use App\Vito\Plugins\Webticus\VitoPrPreviews\Support\PreviewEnvironment;
 use App\Vito\Plugins\Webticus\VitoPrPreviews\Support\PreviewIdentity;
+use App\Vito\Plugins\Webticus\VitoPrPreviews\Support\WorkflowBlueprint;
 
 require __DIR__.'/../Support/PreviewIdentity.php';
 require __DIR__.'/../Support/PreviewEnvironment.php';
+require __DIR__.'/../Support/WorkflowBlueprint.php';
 
 function check(bool $condition, string $message): void
 {
@@ -75,3 +77,12 @@ rejects(fn () => PreviewEnvironment::render($identity, '/home/preview/app', '["v
 rejects(fn () => PreviewEnvironment::render($identity, '/home/preview/app', 'null'));
 
 echo "Preview identity and environment safety checks passed.\n";
+
+$deploy = WorkflowBlueprint::make(4);
+$cleanup = WorkflowBlueprint::make(4, true);
+check(count($deploy['nodes']) === 3 && count($deploy['edges']) === 2, 'Setup must wire Prepare, native Deploy Site and Verify.');
+check($deploy['nodes'][1]['data']['action']['handler'] === 'App\\WorkflowActions\\Site\\DeploySite', 'The build must use the native Deploy Site action.');
+check($deploy['nodes'][2]['data']['action']['inputs']['deployment_id'] === '{deployment_id}', 'Verification must use the native deployment output.');
+check($cleanup['nodes'][0]['data']['action']['inputs']['operation'] === 'destroy', 'Cleanup must default to destroy.');
+check($cleanup['nodes'][0]['data']['action']['inputs']['server_id'] === 4, 'Setup must select the current server.');
+echo "Workflow setup wiring checks passed.\n";

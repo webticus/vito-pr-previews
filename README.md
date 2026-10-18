@@ -10,12 +10,9 @@ In Vito, open **Admin → Plugins**, find `webticus/vito-pr-previews`, then inst
 
 ## 2. Create a Vito workflow
 
-Create two workflows:
+Open your server → **Features → PR previews → Actions → Set up PR previews**. Run setup, then reopen it to copy `workflow-id` and `cleanup-workflow-id` into the GitHub example below. Re-running setup reuses existing matching workflows and keeps their edits.
 
-- **Deploy:** Prepare Laravel PR preview → Vito **Deploy Site** → Verify Laravel PR preview. Mark Prepare as the start. In Deploy Site use `site_id: {site_id}`. In Verify use `site_id: {site_id}` and `deployment_id: {deployment_id}`.
-- **Cleanup:** Manage Laravel PR preview as the start. GitHub passes `operation: destroy`.
-
-Save both and note their IDs from the URLs. GitHub supplies the configuration and PR details when it triggers them.
+Setup creates **Prepare → Vito Deploy Site → Verify**, plus a separate cleanup workflow. GitHub supplies the app configuration and PR details on each run.
 
 Add wildcard DNS for your preview hostnames, for example `*.preview.example.com`, pointing at your app server.
 
