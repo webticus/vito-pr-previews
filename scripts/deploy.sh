@@ -14,6 +14,7 @@ if [[ ! -f shared/.env ]]; then
     printf 'APP_KEY=base64:%s\n' "$(openssl rand -base64 32)" >> shared/.env
 fi
 unset environment_base64
+umask 022
 release="$app_root/releases/$sha-$request_id"
 mkdir -m 0755 "$release"
 git archive "$sha" | tar -x -C "$release"
