@@ -251,7 +251,7 @@ class ManagePreview extends AbstractWorkflowAction
             .' && exit 0; sleep 1; done; exit 1';
 
         try {
-            $server->ssh()->exec($check);
+            $server->ssh($site->user)->exec($check);
         } catch (Throwable $exception) {
             $rollback = 'cd '.escapeshellarg($path).' && if test -L previous; then '
                 .'ln -s "$(readlink previous)" current.rollback && mv -Tf current.rollback current; fi';
